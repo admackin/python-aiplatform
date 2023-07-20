@@ -144,7 +144,7 @@ class _TunableModelMixin(_LanguageModel):
         tuning_job_location: Optional[str] = None,
         tuned_model_location: Optional[str] = None,
         model_display_name: Optional[str] = None,
-    ):
+    ) -> "_LanguageModelTuningJob":
         """Tunes a model based on training data.
 
         This method launches a model tuning job that can take some time.
@@ -197,10 +197,7 @@ class _TunableModelMixin(_LanguageModel):
             base_model=self,
             job=pipeline_job,
         )
-        self._job = job
-        tuned_model = job.result()
-        # The UXR study attendees preferred to tune model in place
-        self._endpoint = tuned_model._endpoint
+        return job
 
 
 @dataclasses.dataclass
@@ -1026,6 +1023,7 @@ class _LanguageModelTuningJob:
         self._job = job
         self._model: Optional[_LanguageModel] = None
 
+    @property
     def result(self) -> "_LanguageModel":
         """Blocks until the tuning is complete and returns a `LanguageModel` object."""
         if self._model:
