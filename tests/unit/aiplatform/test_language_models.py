@@ -293,6 +293,11 @@ _TEST_PIPELINE_SPEC = {
                     "isOptional": True,
                     "parameterType": "NUMBER_DOUBLE",
                 },
+                "learning_rate_multiplier": {
+                    "defaultValue": 1,
+                    "isOptional": True,
+                    "parameterType": "NUMBER_DOUBLE",
+                },
                 "location": {"parameterType": "STRING"},
                 "model_display_name": {"parameterType": "STRING"},
                 "project": {"parameterType": "STRING"},
@@ -665,13 +670,13 @@ class TestLanguageModels:
                 training_data=_TEST_TEXT_BISON_TRAINING_DF,
                 tuning_job_location="europe-west4",
                 tuned_model_location="us-central1",
-                learning_rate=0.1,
+                learning_rate_multiplier=1.0,
             )
             call_kwargs = mock_pipeline_service_create.call_args[1]
             pipeline_arguments = call_kwargs[
                 "pipeline_job"
             ].runtime_config.parameter_values
-            assert pipeline_arguments["learning_rate"] == 0.1
+            assert pipeline_arguments["learning_rate_multiplier"] == 1.0
             assert pipeline_arguments["large_model_reference"] == "text-bison@001"
             assert (
                 call_kwargs["pipeline_job"].encryption_spec.kms_key_name

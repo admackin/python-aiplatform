@@ -138,10 +138,11 @@ class _TunableModelMixin(_LanguageModel):
         training_data: Union[str, "pandas.core.frame.DataFrame"],
         *,
         train_steps: int = 1000,
-        learning_rate: Optional[float] = None,
+        learning_rate_multiplier: Optional[float] = None,
         tuning_job_location: Optional[str] = None,
         tuned_model_location: Optional[str] = None,
         model_display_name: Optional[str] = None,
+        learning_rate: Optional[float] = None,
     ):
         """Tunes a model based on training data.
 
@@ -152,11 +153,12 @@ class _TunableModelMixin(_LanguageModel):
                 The dataset schema is model-specific.
                 See https://cloud.google.com/vertex-ai/docs/generative-ai/models/tune-models#dataset_format
             train_steps: Number of training batches to tune on (batch size is 8 samples).
-            learning_rate: Learning rate for the tuning
+            learning_rate_multiplier: Learning rate multiplier for the tuning
             tuning_job_location: GCP location where the tuning job should be run.
                 Only "europe-west4" and "us-central1" locations are supported for now.
             tuned_model_location: GCP location where the tuned model should be deployed. Only "us-central1" is supported for now.
             model_display_name: Custom display name for the tuned model.
+            learning_rate: Deprecated. Learning rate for the tuning.
 
         Returns:
             A `LanguageModelTuningJob` object that represents the tuning job.
@@ -189,6 +191,7 @@ class _TunableModelMixin(_LanguageModel):
             tuning_pipeline_uri=model_info.tuning_pipeline_uri,
             model_display_name=model_display_name,
             learning_rate=learning_rate,
+            learning_rate_multiplier=learning_rate_multiplier,
             tuning_job_location=tuning_job_location,
         )
 
@@ -1101,6 +1104,7 @@ def _launch_tuning_job(
     train_steps: Optional[int] = None,
     model_display_name: Optional[str] = None,
     learning_rate: Optional[float] = None,
+    learning_rate_multiplier: Optional[float] = None,
     tuning_job_location: str = _TUNING_LOCATIONS[0],
 ) -> aiplatform.PipelineJob:
     output_dir_uri = _generate_tuned_model_dir_uri(model_id=model_id)
@@ -1123,6 +1127,7 @@ def _launch_tuning_job(
         tuning_pipeline_uri=tuning_pipeline_uri,
         model_display_name=model_display_name,
         learning_rate=learning_rate,
+        learning_rate_multiplier=learning_rate_multiplier,
         tuning_job_location=tuning_job_location,
     )
     return job
@@ -1134,6 +1139,7 @@ def _launch_tuning_job_on_jsonl_data(
     tuning_pipeline_uri: str,
     train_steps: Optional[int] = None,
     learning_rate: Optional[float] = None,
+    learning_rate_multiplier: Optional[float] = None,
     model_display_name: Optional[str] = None,
     tuning_job_location: str = _TUNING_LOCATIONS[0],
 ) -> aiplatform.PipelineJob:
@@ -1164,6 +1170,8 @@ def _launch_tuning_job_on_jsonl_data(
     }
     if learning_rate:
         pipeline_arguments["learning_rate"] = learning_rate
+    if learning_rate_multiplier:
+        pipeline_arguments["learning_rate_multiplier"] = learning_rate_multiplier
 
     if dataset_name_or_uri.startswith("projects/"):
         pipeline_arguments["dataset_name"] = dataset_name_or_uri
