@@ -56,6 +56,10 @@ from google.cloud.aiplatform.jobs import (
     ModelDeploymentMonitoringJob,
 )
 from google.cloud.aiplatform.pipeline_jobs import PipelineJob
+from google.cloud.aiplatform.schedules import _Schedule
+from google.cloud.aiplatform.pipeline_job_schedules import (
+    PipelineJobSchedule,
+)
 from google.cloud.aiplatform.tensorboard import (
     Tensorboard,
     TensorboardExperiment,
@@ -117,6 +121,7 @@ Context = metadata.context.Context
 
 
 __all__ = (
+    "_Schedule",
     "end_run",
     "explain",
     "gapic",
@@ -167,6 +172,7 @@ __all__ = (
     "ModelEvaluation",
     "ModelDeploymentMonitoringJob",
     "PipelineJob",
+    "PipelineJobSchedule",
     "PrivateEndpoint",
     "RandomSampleConfig",
     "SequenceToSequencePlusForecastingTrainingJob",
