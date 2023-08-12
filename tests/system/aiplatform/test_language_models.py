@@ -22,6 +22,7 @@ from google.cloud.aiplatform.compat.types import (
     job_state as gca_job_state,
 )
 from tests.system.aiplatform import e2e_base
+from vertexai import language_models
 from vertexai.preview.language_models import (
     ChatModel,
     InputOutputTextPair,
@@ -100,7 +101,7 @@ class TestLanguageModels(e2e_base.TestEndToEnd):
         """Test tuning, listing and loading models."""
         aiplatform.init(project=e2e_base._PROJECT, location=e2e_base._LOCATION)
 
-        model = TextGenerationModel.from_pretrained("google/text-bison@001")
+        model = language_models.TextGenerationModel.from_pretrained("text-bison@001")
 
         import pandas
 
