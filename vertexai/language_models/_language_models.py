@@ -15,10 +15,11 @@
 """Classes for working with language models."""
 
 import dataclasses
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
 import warnings
 
 from google.cloud import aiplatform
+from google.cloud.aiplatform import _streaming_prediction
 from google.cloud.aiplatform import base
 from google.cloud.aiplatform import initializer as aiplatform_initializer
 from google.cloud.aiplatform import utils as aiplatform_utils
@@ -326,6 +327,70 @@ class _TextGenerationModel(_LanguageModel):
                 )
             )
         return results
+
+    def predict_streaming(
+        self,
+        prompt: str,
+        *,
+        max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
+        temperature: Optional[float] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+    ) -> Iterator[TextGenerationResponse]:
+        """Gets a streaming model response for a single prompt.
+
+        The result is a stream (generator) of partial responses.
+
+        Args:
+            prompt: Question to ask the model.
+            max_output_tokens: Max length of the output text in tokens. Range: [1, 1024].
+            temperature: Controls the randomness of predictions. Range: [0, 1]. Default: 0.
+            top_k: The number of highest probability vocabulary tokens to keep for top-k-filtering. Range: [1, 40]. Default: 40.
+            top_p: The cumulative probability of parameter highest probability vocabulary tokens to keep for nucleus sampling. Range: [0, 1]. Default: 0.95.
+
+        Yields:
+            A stream of `TextGenerationResponse` objects that contain partial
+            responses produced by the model.
+        """
+        prediction_service_client = self._endpoint._prediction_client
+        # Note: "prompt", not "content" like in the non-streaming case.
+        instance = {"prompt": prompt}
+        prediction_parameters = {}
+
+        if max_output_tokens:
+            prediction_parameters["maxDecodeSteps"] = max_output_tokens
+
+        if temperature is not None:
+            prediction_parameters["temperature"] = temperature
+
+        if top_p:
+            prediction_parameters["topP"] = top_p
+
+        if top_k:
+            prediction_parameters["topK"] = top_k
+
+        for prediction_dict in _streaming_prediction.predict_stream_of_dicts_from_single_dict(
+            prediction_service_client=prediction_service_client,
+            endpoint_name=self._endpoint_name,
+            instance=instance,
+            parameters=prediction_parameters,
+        ):
+            safety_attributes_dict = prediction_dict.get("safetyAttributes", {})
+            prediction_obj = aiplatform.models.Prediction(
+                predictions=[prediction_dict],
+                deployed_model_id="",
+            )
+            yield TextGenerationResponse(
+                text=prediction_dict["content"],
+                _prediction_response=prediction_obj,
+                is_blocked=safety_attributes_dict.get("blocked", False),
+                safety_attributes=dict(
+                    zip(
+                        safety_attributes_dict.get("categories", []),
+                        safety_attributes_dict.get("scores", []),
+                    )
+                ),
+            )
 
 
 class _ModelWithBatchPredict(_LanguageModel):
@@ -883,6 +948,119 @@ class _ChatSessionBase:
         )
 
         return response_obj
+
+    def send_message_streaming(
+        self,
+        message: str,
+        *,
+        max_output_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+    ) -> Iterator[TextGenerationResponse]:
+        """Sends message to the language model and gets a streamed response.
+
+        The response is only added to the history once it's fully read.
+
+        Args:
+            message: Message to send to the model
+            max_output_tokens: Max length of the output text in tokens. Range: [1, 1024].
+                Uses the value specified when calling `ChatModel.start_chat` by default.
+            temperature: Controls the randomness of predictions. Range: [0, 1]. Default: 0.
+                Uses the value specified when calling `ChatModel.start_chat` by default.
+            top_k: The number of highest probability vocabulary tokens to keep for top-k-filtering. Range: [1, 40]. Default: 40.
+                Uses the value specified when calling `ChatModel.start_chat` by default.
+            top_p: The cumulative probability of parameter highest probability vocabulary tokens to keep for nucleus sampling. Range: [0, 1]. Default: 0.95.
+                Uses the value specified when calling `ChatModel.start_chat` by default.
+
+        Yields:
+            A stream of `TextGenerationResponse` objects that contain partial
+            responses produced by the model.
+        """
+        prediction_parameters = {}
+
+        max_output_tokens = max_output_tokens or self._max_output_tokens
+        if max_output_tokens:
+            prediction_parameters["maxDecodeSteps"] = max_output_tokens
+
+        temperature = temperature if temperature is not None else self._temperature
+        if temperature is not None:
+            prediction_parameters["temperature"] = temperature
+
+        top_p = top_p or self._top_p
+        if top_p:
+            prediction_parameters["topP"] = top_p
+
+        top_k = top_k or self._top_k
+        if top_k:
+            prediction_parameters["topK"] = top_k
+
+        message_structs = []
+        for past_message in self._message_history:
+            message_structs.append(
+                {
+                    "author": past_message.author,
+                    "content": past_message.content,
+                }
+            )
+        message_structs.append(
+            {
+                "author": self.USER_AUTHOR,
+                "content": message,
+            }
+        )
+
+        prediction_instance = {"messages": message_structs}
+        if not self._is_code_chat_session and self._context:
+            prediction_instance["context"] = self._context
+        if not self._is_code_chat_session and self._examples:
+            prediction_instance["examples"] = [
+                {
+                    "input": {"content": example.input_text},
+                    "output": {"content": example.output_text},
+                }
+                for example in self._examples
+            ]
+
+        prediction_service_client = self._model._endpoint._prediction_client
+
+        full_response_text = ""
+
+        for prediction_dict in _streaming_prediction.predict_stream_of_dicts_from_dict(
+            prediction_service_client=prediction_service_client,
+            endpoint_name=self._model._endpoint_name,
+            instance=prediction_instance,
+            parameters=prediction_parameters,
+        ):
+            prediction = prediction_dict
+            # ! Note: For chat models, the safetyAttributes is a list.
+            safety_attributes = prediction["safetyAttributes"][0]
+            response_obj = TextGenerationResponse(
+                text=prediction["candidates"][0]["content"]
+                if prediction.get("candidates")
+                else None,
+                _prediction_response=prediction_dict,
+                is_blocked=safety_attributes.get("blocked", False),
+                safety_attributes=dict(
+                    zip(
+                        # Unlike with normal prediction, in streaming prediction
+                        # categories and scores can be None
+                        safety_attributes.get("categories") or [],
+                        safety_attributes.get("scores") or [],
+                    )
+                ),
+            )
+            full_response_text += response_obj.text
+            yield response_obj
+
+        # We only add the question and answer to the history if/when the answer
+        # was read fully. Otherwise, the answer would have been truncated.
+        self._message_history.append(
+            ChatMessage(content=message, author=self.USER_AUTHOR)
+        )
+        self._message_history.append(
+            ChatMessage(content=full_response_text, author=self.MODEL_AUTHOR)
+        )
 
 
 class ChatSession(_ChatSessionBase):
