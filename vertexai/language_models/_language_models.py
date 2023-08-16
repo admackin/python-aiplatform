@@ -182,13 +182,18 @@ class _TunableModelMixin(_LanguageModel):
         )
         if not model_info.tuning_pipeline_uri:
             raise RuntimeError(f"The {self._model_id} model does not support tuning")
+
+        tuning_parameters = {}
+        if learning_rate is not None:
+            tuning_parameters["learning_rate"] = learning_rate
+
         pipeline_job = _launch_tuning_job(
             training_data=training_data,
             train_steps=train_steps,
             model_id=model_info.tuning_model_id,
             tuning_pipeline_uri=model_info.tuning_pipeline_uri,
             model_display_name=model_display_name,
-            learning_rate=learning_rate,
+            tuning_parameters=tuning_parameters,
             tuning_job_location=tuning_job_location,
         )
 
@@ -1118,48 +1123,28 @@ def _launch_tuning_job(
     training_data: Union[str, "pandas.core.frame.DataFrame"],
     model_id: str,
     tuning_pipeline_uri: str,
+    tuning_parameters: Dict[str, Any],
     train_steps: Optional[int] = None,
     model_display_name: Optional[str] = None,
-    learning_rate: Optional[float] = None,
     tuning_job_location: str = _TUNING_LOCATIONS[0],
 ) -> aiplatform.PipelineJob:
     output_dir_uri = _generate_tuned_model_dir_uri(model_id=model_id)
     if isinstance(training_data, str):
-        dataset_uri = training_data
+        dataset_name_or_uri = training_data
     elif pandas and isinstance(training_data, pandas.DataFrame):
         dataset_uri = _uri_join(output_dir_uri, "training_data.jsonl")
 
         gcs_utils._upload_pandas_df_to_gcs(
             df=training_data, upload_gcs_path=dataset_uri
         )
-
+        dataset_name_or_uri = dataset_uri
     else:
         raise TypeError(f"Unsupported training_data type: {type(training_data)}")
 
-    job = _launch_tuning_job_on_jsonl_data(
-        model_id=model_id,
-        dataset_name_or_uri=dataset_uri,
-        train_steps=train_steps,
-        tuning_pipeline_uri=tuning_pipeline_uri,
-        model_display_name=model_display_name,
-        learning_rate=learning_rate,
-        tuning_job_location=tuning_job_location,
-    )
-    return job
-
-
-def _launch_tuning_job_on_jsonl_data(
-    model_id: str,
-    dataset_name_or_uri: str,
-    tuning_pipeline_uri: str,
-    train_steps: Optional[int] = None,
-    learning_rate: Optional[float] = None,
-    model_display_name: Optional[str] = None,
-    tuning_job_location: str = _TUNING_LOCATIONS[0],
-) -> aiplatform.PipelineJob:
     if not model_display_name:
         # Creating a human-readable model display name
         name = f"{model_id} tuned for {train_steps} steps"
+        learning_rate = tuning_parameters.get("learning_rate")
         if learning_rate:
             name += f" with learning rate {learning_rate}"
         name += " on "
@@ -1182,8 +1167,6 @@ def _launch_tuning_job_on_jsonl_data(
         "large_model_reference": model_id,
         "model_display_name": model_display_name,
     }
-    if learning_rate:
-        pipeline_arguments["learning_rate"] = learning_rate
 
     if dataset_name_or_uri.startswith("projects/"):
         pipeline_arguments["dataset_name"] = dataset_name_or_uri
@@ -1193,6 +1176,7 @@ def _launch_tuning_job_on_jsonl_data(
         pipeline_arguments[
             "encryption_spec_key_name"
         ] = aiplatform_initializer.global_config.encryption_spec_key_name
+    pipeline_arguments.update(tuning_parameters)
     job = aiplatform.PipelineJob(
         template_path=tuning_pipeline_uri,
         display_name=None,
