@@ -137,8 +137,82 @@ class _TunableModelMixin(_LanguageModel):
         self,
         training_data: Union[str, "pandas.core.frame.DataFrame"],
         *,
-        train_steps: int = 1000,
-        learning_rate: Optional[float] = None,
+        train_steps: Optional[int] = None,
+        learning_rate_multiplier: Optional[float] = None,
+        tuning_job_location: Optional[str] = None,
+        tuned_model_location: Optional[str] = None,
+        model_display_name: Optional[str] = None,
+        evaluation_data: Optional[str] = None,
+        evaluation_interval: Optional[int] = None,
+        enable_early_stopping: Optional[bool] = None,
+        tensorboard: Optional[Union[aiplatform.Tensorboard, str]] = None,
+    ):
+        """Tunes a model based on training data.
+
+        This method launches a model tuning job that can take some time.
+
+        Args:
+            training_data: A Pandas DataFrame or a URI pointing to data in JSON lines format.
+                The dataset schema is model-specific.
+                See https://cloud.google.com/vertex-ai/docs/generative-ai/models/tune-models#dataset_format
+            train_steps: Number of training batches to tune on (batch size is 8 samples). Default: 300.
+            learning_rate_multiplier: Learning rate multiplier to use in tuning. Default: 1.0.
+            tuning_job_location: GCP location where the tuning job should be run.
+                Only "europe-west4" and "us-central1" locations are supported for now.
+            tuned_model_location: GCP location where the tuned model should be deployed. Only "us-central1" is supported for now.
+            model_display_name: Custom display name for the tuned model.
+            evaluation_data: GCS URI of the evaluation dataset.
+            evaluation_interval: The evaluation will run at every
+                evaluation_interval tuning steps. Default: 20.
+            enable_early_stopping: If True, the tuning may stop early before
+                completing all the tuning steps. Requires evaluation_data.
+            tensorboard: Vertex Tensorboard where to write the evaluation metrics.
+                The Tensorboard must be in the `tuning_job_location` location.
+
+        Returns:
+            A `LanguageModelTuningJob` object that represents the tuning job.
+            Calling `job.result()` blocks until the tuning is complete and returns a `LanguageModel` object.
+
+        Raises:
+            ValueError: If the "tuning_job_location" value is not supported
+            ValueError: If the "tuned_model_location" value is not supported
+            RuntimeError: If the model does not support tuning
+        """
+        tuning_parameters = {}
+        if train_steps is not None:
+            tuning_parameters["train_steps"] = train_steps
+        if learning_rate_multiplier is not None:
+            tuning_parameters["learning_rate_multiplier"] = learning_rate_multiplier
+        if evaluation_data is not None:
+            if isinstance(evaluation_data, str):
+                tuning_parameters["evaluation_data_uri"] = evaluation_data
+            else:
+                raise TypeError("evaluation_data should be a URI string")
+        if evaluation_interval is not None:
+            tuning_parameters["evaluation_interval"] = evaluation_interval
+        if enable_early_stopping is not None:
+            tuning_parameters["enable_early_stopping"] = enable_early_stopping
+        if tensorboard is not None:
+            if isinstance(tensorboard, aiplatform.Tensorboard):
+                tuning_parameters["tensorboard_resource_id"] = tensorboard.resource_name
+            elif isinstance(tensorboard, str):
+                tuning_parameters["tensorboard_resource_id"] = tensorboard
+            else:
+                raise TypeError("tensorboard should be a URI string")
+
+        return self._tune_model(
+            training_data=training_data,
+            tuning_parameters=tuning_parameters,
+            tuning_job_location=tuning_job_location,
+            tuned_model_location=tuned_model_location,
+            model_display_name=model_display_name,
+        )
+
+    def _tune_model(
+        self,
+        training_data: Union[str, "pandas.core.frame.DataFrame"],
+        *,
+        tuning_parameters: Dict[str, Any],
         tuning_job_location: Optional[str] = None,
         tuned_model_location: Optional[str] = None,
         model_display_name: Optional[str] = None,
@@ -151,8 +225,7 @@ class _TunableModelMixin(_LanguageModel):
             training_data: A Pandas DataFrame or a URI pointing to data in JSON lines format.
                 The dataset schema is model-specific.
                 See https://cloud.google.com/vertex-ai/docs/generative-ai/models/tune-models#dataset_format
-            train_steps: Number of training batches to tune on (batch size is 8 samples).
-            learning_rate: Learning rate for the tuning
+            tuning_parameters: Tuning pipeline parameter values.
             tuning_job_location: GCP location where the tuning job should be run.
                 Only "europe-west4" and "us-central1" locations are supported for now.
             tuned_model_location: GCP location where the tuned model should be deployed. Only "us-central1" is supported for now.
@@ -184,11 +257,10 @@ class _TunableModelMixin(_LanguageModel):
             raise RuntimeError(f"The {self._model_id} model does not support tuning")
         pipeline_job = _launch_tuning_job(
             training_data=training_data,
-            train_steps=train_steps,
             model_id=model_info.tuning_model_id,
             tuning_pipeline_uri=model_info.tuning_pipeline_uri,
+            tuning_parameters=tuning_parameters,
             model_display_name=model_display_name,
-            learning_rate=learning_rate,
             tuning_job_location=tuning_job_location,
         )
 
@@ -201,6 +273,93 @@ class _TunableModelMixin(_LanguageModel):
         # The UXR study attendees preferred to tune model in place
         self._endpoint = tuned_model._endpoint
         self._endpoint_name = tuned_model._endpoint_name
+
+
+class _PreviewTunableModelMixin(_TunableModelMixin):
+    """Model that can be tuned."""
+
+    def tune_model(
+        self,
+        training_data: Union[str, "pandas.core.frame.DataFrame"],
+        *,
+        train_steps: int = 1000,
+        learning_rate_multiplier: Optional[float] = None,
+        tuning_job_location: Optional[str] = None,
+        tuned_model_location: Optional[str] = None,
+        model_display_name: Optional[str] = None,
+        evaluation_data: Optional[str] = None,
+        evaluation_interval: Optional[int] = None,
+        enable_early_stopping: Optional[bool] = None,
+        tensorboard: Optional[aiplatform.Tensorboard] = None,
+        learning_rate: Optional[float] = None,
+    ):
+        """Tunes a model based on training data.
+
+        This method launches a model tuning job that can take some time.
+
+        Args:
+            training_data: A Pandas DataFrame or a URI pointing to data in JSON lines format.
+                The dataset schema is model-specific.
+                See https://cloud.google.com/vertex-ai/docs/generative-ai/models/tune-models#dataset_format
+            train_steps: Number of training batches to tune on (batch size is 8 samples).
+            learning_rate_multiplier: Learning rate multiplier to use in tuning.
+            tuning_job_location: GCP location where the tuning job should be run.
+                Only "europe-west4" and "us-central1" locations are supported for now.
+            tuned_model_location: GCP location where the tuned model should be deployed. Only "us-central1" is supported for now.
+            model_display_name: Custom display name for the tuned model.
+            evaluation_data: GCS URI of the evaluation dataset.
+            evaluation_interval: The evaluation will run at every
+                evaluation_interval tuning steps. Default: 20.
+            enable_early_stopping: If True, the tuning may stop early before
+                completing all the tuning steps. Requires evaluation_data.
+            tensorboard: Vertex Tensorboard where to write the evaluation metrics.
+                The Tensorboard must be in the `tuning_job_location` location.
+            learning_rate: Deprecated. Learning rate for the tuning.
+
+        Returns:
+            A `LanguageModelTuningJob` object that represents the tuning job.
+            Calling `job.result()` blocks until the tuning is complete and returns a `LanguageModel` object.
+
+        Raises:
+            ValueError: If the "tuning_job_location" value is not supported
+            ValueError: If the "tuned_model_location" value is not supported
+            RuntimeError: If the model does not support tuning
+        """
+        tuning_parameters = {}
+        if train_steps is not None:
+            tuning_parameters["train_steps"] = train_steps
+        if learning_rate is not None:
+            _LOGGER.warning(
+                "The learning_rate parameter is deprecated."
+                "Use the learning_rate_multiplier parameter instead."
+            )
+            tuning_parameters["learning_rate"] = learning_rate
+        if learning_rate_multiplier is not None:
+            tuning_parameters["learning_rate_multiplier"] = learning_rate_multiplier
+        if evaluation_data is not None:
+            if isinstance(evaluation_data, str):
+                tuning_parameters["evaluation_data_uri"] = evaluation_data
+            else:
+                raise TypeError("evaluation_data should be a URI string")
+        if evaluation_interval is not None:
+            tuning_parameters["evaluation_interval"] = evaluation_interval
+        if enable_early_stopping is not None:
+            tuning_parameters["enable_early_stopping"] = enable_early_stopping
+        if tensorboard is not None:
+            if isinstance(tensorboard, aiplatform.Tensorboard):
+                tuning_parameters["tensorboard_resource_id"] = tensorboard.resource_name
+            elif isinstance(tensorboard, str):
+                tuning_parameters["tensorboard_resource_id"] = tensorboard
+            else:
+                raise TypeError("tensorboard should be a URI string")
+
+        return self._tune_model(
+            training_data=training_data,
+            tuning_parameters=tuning_parameters,
+            tuning_job_location=tuning_job_location,
+            tuned_model_location=tuned_model_location,
+            model_display_name=model_display_name,
+        )
 
 
 @dataclasses.dataclass
@@ -443,7 +602,7 @@ class TextGenerationModel(_TextGenerationModel, _ModelWithBatchPredict):
 
 
 class _PreviewTextGenerationModel(
-    _TextGenerationModel, _TunableModelMixin, _PreviewModelWithBatchPredict
+    _TextGenerationModel, _PreviewTunableModelMixin, _PreviewModelWithBatchPredict
 ):
     # Do not add docstring so that it's inherited from the base class.
     _LAUNCH_STAGE = _model_garden_models._SDK_PUBLIC_PREVIEW_LAUNCH_STAGE
@@ -1118,50 +1277,35 @@ def _launch_tuning_job(
     training_data: Union[str, "pandas.core.frame.DataFrame"],
     model_id: str,
     tuning_pipeline_uri: str,
-    train_steps: Optional[int] = None,
+    tuning_parameters: Dict[str, Any],
     model_display_name: Optional[str] = None,
-    learning_rate: Optional[float] = None,
     tuning_job_location: str = _TUNING_LOCATIONS[0],
 ) -> aiplatform.PipelineJob:
     output_dir_uri = _generate_tuned_model_dir_uri(model_id=model_id)
     if isinstance(training_data, str):
-        dataset_uri = training_data
+        dataset_name_or_uri = training_data
     elif pandas and isinstance(training_data, pandas.DataFrame):
         dataset_uri = _uri_join(output_dir_uri, "training_data.jsonl")
 
         gcs_utils._upload_pandas_df_to_gcs(
             df=training_data, upload_gcs_path=dataset_uri
         )
-
+        dataset_name_or_uri = dataset_uri
     else:
         raise TypeError(f"Unsupported training_data type: {type(training_data)}")
 
-    job = _launch_tuning_job_on_jsonl_data(
-        model_id=model_id,
-        dataset_name_or_uri=dataset_uri,
-        train_steps=train_steps,
-        tuning_pipeline_uri=tuning_pipeline_uri,
-        model_display_name=model_display_name,
-        learning_rate=learning_rate,
-        tuning_job_location=tuning_job_location,
-    )
-    return job
-
-
-def _launch_tuning_job_on_jsonl_data(
-    model_id: str,
-    dataset_name_or_uri: str,
-    tuning_pipeline_uri: str,
-    train_steps: Optional[int] = None,
-    learning_rate: Optional[float] = None,
-    model_display_name: Optional[str] = None,
-    tuning_job_location: str = _TUNING_LOCATIONS[0],
-) -> aiplatform.PipelineJob:
     if not model_display_name:
         # Creating a human-readable model display name
-        name = f"{model_id} tuned for {train_steps} steps"
+        name = f"{model_id} tuned"
+
+        train_steps = tuning_parameters.get("train_steps")
+        if train_steps:
+            name += f" for {train_steps} steps"
+
+        learning_rate = tuning_parameters.get("learning_rate")
         if learning_rate:
             name += f" with learning rate {learning_rate}"
+
         name += " on "
         # Truncating the start of the dataset URI to keep total length <= 128.
         max_display_name_length = 128
@@ -1174,7 +1318,6 @@ def _launch_tuning_job_on_jsonl_data(
         model_display_name = name[:max_display_name_length]
 
     pipeline_arguments = {
-        "train_steps": train_steps,
         "project": aiplatform_initializer.global_config.project,
         # TODO(b/275444096): Remove the explicit location once tuning can happen in all regions
         # "location": aiplatform_initializer.global_config.location,
@@ -1182,8 +1325,6 @@ def _launch_tuning_job_on_jsonl_data(
         "large_model_reference": model_id,
         "model_display_name": model_display_name,
     }
-    if learning_rate:
-        pipeline_arguments["learning_rate"] = learning_rate
 
     if dataset_name_or_uri.startswith("projects/"):
         pipeline_arguments["dataset_name"] = dataset_name_or_uri
@@ -1193,6 +1334,7 @@ def _launch_tuning_job_on_jsonl_data(
         pipeline_arguments[
             "encryption_spec_key_name"
         ] = aiplatform_initializer.global_config.encryption_spec_key_name
+    pipeline_arguments.update(tuning_parameters)
     job = aiplatform.PipelineJob(
         template_path=tuning_pipeline_uri,
         display_name=None,
